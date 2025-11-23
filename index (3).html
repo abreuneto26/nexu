@@ -1,0 +1,698 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NexusMed AI - Prontuário Inteligente</title>
+  
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- React & ReactDOM (UMD) -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  
+  <!-- Babel Standalone (para compilar JSX no navegador) -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  
+  <!-- Lucide Icons (UMD) -->
+  <script src="https://unpkg.com/lucide@0.263.1/dist/umd/lucide.min.js"></script>
+
+  <!-- Google Fonts -->
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+
+  <style>
+    body { font-family: 'Inter', sans-serif; }
+    
+    /* Custom Scrollbar */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #a78bfa; border-radius: 4px; }
+    .dark ::-webkit-scrollbar-thumb { background: #4c1d95; }
+    .dark ::-webkit-scrollbar-thumb:hover { background: #5b21b6; }
+    
+    /* Glass Effects */
+    .glass-dark {
+      background: rgba(20, 10, 30, 0.7);
+      backdrop-filter: blur(12px);
+      border: 1px solid rgba(139, 92, 246, 0.15);
+    }
+    .glass-light {
+      background: rgba(255, 255, 255, 0.85);
+      backdrop-filter: blur(12px);
+      border: 1px solid rgba(221, 214, 254, 0.8);
+      box-shadow: 0 4px 6px -1px rgba(139, 92, 246, 0.05);
+    }
+
+    /* Print Styles */
+    @media print {
+      body { background: white; color: black; }
+      .no-print { display: none !important; }
+      .print-full { width: 100% !important; height: 100% !important; position: absolute; top: 0; left: 0; margin: 0; }
+    }
+  </style>
+<script type="importmap">
+{
+  "imports": {
+    "react/": "https://aistudiocdn.com/react@^19.2.0/",
+    "react": "https://aistudiocdn.com/react@^19.2.0",
+    "lucide-react": "https://aistudiocdn.com/lucide-react@^0.554.0",
+    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
+    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.30.0"
+  }
+}
+</script>
+<link rel="stylesheet" href="/index.css">
+</head>
+<body class="h-screen overflow-hidden selection:bg-violet-500 selection:text-white bg-slate-50">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef, useMemo } = React;
+    const { createRoot } = ReactDOM;
+    
+    // Lucide Icons Destructuring
+    const { 
+      Stethoscope, FileText, Pill, Users, BrainCircuit, Mic, Upload, Camera, Calculator, 
+      Wand2, Network, Save, Trash2, Check, X, Search, Plus, Printer, ChevronDown, 
+      ChevronRight, Menu, FileOutput, Sun, Moon, ArrowLeft, Play, Activity, Syringe, 
+      Heart, Baby, Siren, FileBadge, Bone, Brain, Eye, ScanFace, Droplet, Microscope, 
+      Zap, BookOpen, Sparkles, AlertTriangle, Split, ShieldAlert, TestTube2, Settings, 
+      Palette, Thermometer, Scissors, Dna, Calendar, Image: ImageIcon, Library, GraduationCap, 
+      MessageCircle, LogOut, Layout, TableProperties, UploadCloud, FilePlus, Edit3, AlignLeft, Key 
+    } = lucide.icons;
+
+    // --- GEMINI REST API WRAPPER (No SDK needed) ---
+    // Simula a estrutura do SDK oficial usando fetch puro
+    const Type = {
+      STRING: 'STRING',
+      NUMBER: 'NUMBER',
+      INTEGER: 'INTEGER',
+      BOOLEAN: 'BOOLEAN',
+      ARRAY: 'ARRAY',
+      OBJECT: 'OBJECT'
+    };
+
+    class GoogleGenAI {
+      constructor({ apiKey }) {
+        this.apiKey = apiKey;
+        this.baseUrl = "https://generativelanguage.googleapis.com/v1beta/models";
+      }
+
+      get models() {
+        return {
+          generateContent: async ({ model, contents, config }) => {
+            const url = `${this.baseUrl}/${model}:generateContent?key=${this.apiKey}`;
+            
+            // Map the SDK format to REST API format
+            const body = {
+              contents: Array.isArray(contents) ? contents : (contents.parts ? [contents] : [{ parts: [{ text: contents }] }]),
+              generationConfig: config ? {
+                responseMimeType: config.responseMimeType,
+                responseSchema: config.responseSchema,
+                temperature: config.temperature,
+                topK: config.topK,
+                topP: config.topP,
+              } : undefined
+            };
+
+            const response = await fetch(url, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(body)
+            });
+
+            if (!response.ok) {
+              const err = await response.json();
+              throw new Error(err.error?.message || 'Erro na API Gemini');
+            }
+
+            const data = await response.json();
+            
+            // Mock the SDK response object
+            return {
+              text: data.candidates?.[0]?.content?.parts?.map(p => p.text).join('') || '',
+              candidates: data.candidates
+            };
+          }
+        };
+      }
+    }
+
+    // --- DATABASES ---
+
+    const MEDICATIONS_DB = [
+      { name: "Dipirona 500mg", type: "Analgesico", posology: "1 comprimido VO a cada 6h SN." },
+      { name: "Dipirona 1g", type: "Analgesico", posology: "1 comprimido VO a cada 6h SN." },
+      { name: "Paracetamol 500mg", type: "Analgesico", posology: "1 comprimido VO a cada 6h SN." },
+      { name: "Paracetamol 750mg", type: "Analgesico", posology: "1 comprimido VO a cada 6h SN." },
+      { name: "Ibuprofeno 400mg", type: "AINE", posology: "1 comprimido VO a cada 8h após refeições." },
+      { name: "Ibuprofeno 600mg", type: "AINE", posology: "1 comprimido VO a cada 8h após refeições." },
+      { name: "Cetoprofeno 100mg", type: "AINE", posology: "1 comprimido VO a cada 12h." },
+      { name: "Nimesulida 100mg", type: "AINE", posology: "1 comprimido VO a cada 12h por 3-5 dias." },
+      { name: "Amoxicilina 500mg", type: "Antibiotico", posology: "1 cápsula VO de 8/8h por 7 dias." },
+      { name: "Amoxicilina + Clavulanato 875/125mg", type: "Antibiotico", posology: "1 comprimido VO de 12/12h por 7-10 dias." },
+      { name: "Azitromicina 500mg", type: "Antibiotico", posology: "1 comprimido VO por dia por 3-5 dias." },
+      { name: "Ciprofloxacino 500mg", type: "Antibiotico", posology: "1 comprimido VO de 12/12h por 7-10 dias." },
+      { name: "Cefalexina 500mg", type: "Antibiotico", posology: "1 cápsula VO de 6/6h por 7 dias." },
+      { name: "Losartana 50mg", type: "Anti-hipertensivo", posology: "1 comprimido VO 12/12h." },
+      { name: "Enalapril 10mg", type: "Anti-hipertensivo", posology: "1 comprimido VO 12/12h." },
+      { name: "Anlodipino 5mg", type: "Anti-hipertensivo", posology: "1 comprimido VO 1x ao dia." },
+      { name: "Hidroclorotiazida 25mg", type: "Diurético", posology: "1 comprimido VO pela manhã." },
+      { name: "Simvastatina 20mg", type: "Lipidimico", posology: "1 comprimido VO a noite." },
+      { name: "Omeprazol 20mg", type: "IBP", posology: "1 cápsula VO em jejum." },
+      { name: "Metformina 500mg", type: "Hipoglicemiante", posology: "1 comprimido VO após almoço e jantar." },
+      { name: "Clonazepam 0.25mg (Sublingual)", type: "Benzodiazepínico", posology: "1 comprimido SL SN crise ansiedade." },
+      { name: "Sertralina 50mg", type: "Antidepressivo", posology: "1 comprimido pela manhã." },
+      { name: "Loratadina 10mg", type: "Antialérgico", posology: "1 comprimido 1x ao dia." },
+      { name: "Prednisolona 20mg", type: "Corticosteróide", posology: "1 comprimido pela manhã por 5 dias." }
+    ];
+
+    const EXAMS_DB = [
+      { name: "Hemograma Completo" }, { name: "Plaquetas" }, { name: "Glicemia de Jejum" }, 
+      { name: "Hemoglobina Glicada" }, { name: "Colesterol Total e Frações" }, { name: "Triglicerídeos" },
+      { name: "Ureia" }, { name: "Creatinina" }, { name: "TGO (AST)" }, { name: "TGP (ALT)" }, 
+      { name: "Gama GT" }, { name: "TSH" }, { name: "T4 Livre" }, { name: "EAS (Urina Tipo 1)" },
+      { name: "Urocultura" }, { name: "Beta HCG" }, { name: "Raio-X de Tórax" }, { name: "ECG" },
+      { name: "USG Abdome Total" }
+    ];
+
+    const TOOLS_DB = {
+      "IA Estratégica": [
+        { name: "Segunda Opinião", desc: "Avalia criticamente a coleta do SOAP e sugere prioridades." },
+        { name: "Diagnóstico Diferencial", desc: "Gera lista de hipóteses ordenadas por probabilidade." },
+        { name: "Detector de Red Flags", desc: "Escaneia o caso em busca de sinais de alarme." },
+        { name: "Interpretar Labs", desc: "Análise profunda de distúrbios e exames." },
+        { name: "Análise Interação Medicamentosa", desc: "Verifica interações graves entre drogas." }
+      ],
+      "Cardiologia": [
+        { name: "Escore HEART", desc: "Risco para dor torácica na emergência." },
+        { name: "Calculadora CHA2DS2-VASc", desc: "Risco de AVC em FA." },
+        { name: "Critérios de Framingham", desc: "Risco cardiovascular em 10 anos." }
+      ],
+      "Pediatria": [
+        { name: "Doses Pediátricas", desc: "Calculadora de doses por peso." },
+        { name: "Score de Apgar", desc: "Vitalidade neonatal." },
+        { name: "Desidratação (OMS)", desc: "Classificação e Planos A, B, C." }
+      ],
+      "Emergência": [
+        { name: "qSOFA", desc: "Critérios rápidos de sepse." },
+        { name: "Glasgow", desc: "Escala de Coma." },
+        { name: "Wells (TEP)", desc: "Probabilidade de Embolia Pulmonar." }
+      ]
+    };
+
+    const SPECIALTIES_ICONS = {
+      "IA Estratégica": Brain,
+      "Cardiologia": Heart,
+      "Pediatria": Baby,
+      "Emergência": Siren
+    };
+
+    // --- UTILS ---
+
+    const fileToGenerativePart = async (file) => {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const base64Data = reader.result;
+          const base64Content = base64Data.split(',')[1];
+          resolve({
+            inlineData: {
+              data: base64Content,
+              mimeType: file.type,
+            },
+          });
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+    };
+
+    const fileToDataUrl = async (file) => {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+    };
+
+    // --- COMPONENTS ---
+
+    const Toast = ({ message, type, onClose }) => {
+      useEffect(() => {
+        const timer = setTimeout(onClose, 3000);
+        return () => clearTimeout(timer);
+      }, [onClose]);
+
+      return (
+        <div className={`fixed top-4 right-4 z-[100] animate-in slide-in-from-right-10 fade-in duration-300 rounded-lg shadow-2xl p-4 flex items-center gap-3 border ${type === 'success' ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-red-50 border-red-200 text-red-800'}`}>
+          <div className={`p-1 rounded-full ${type === 'success' ? 'bg-emerald-100 text-emerald-600' : 'bg-red-100 text-red-600'}`}>
+            {type === 'success' ? <Check size={16}/> : <AlertTriangle size={16}/>}
+          </div>
+          <span className="text-sm font-semibold">{message}</span>
+          <button onClick={onClose} className="ml-2 opacity-50 hover:opacity-100"><X size={14}/></button>
+        </div>
+      );
+    };
+
+    const SimpleMarkdown = ({ content, theme }) => {
+      if (!content) return null;
+      const lines = content.split('\n');
+      return (
+        <div className={theme === 'dark' ? 'text-gray-100' : 'text-slate-800'}>
+          {lines.map((line, i) => {
+            if (line.startsWith('#')) return <h3 key={i} className="font-bold text-lg mt-2 mb-1 border-b border-gray-500/20">{line.replace(/^#+/, '')}</h3>;
+            if (line.startsWith('-') || line.startsWith('*')) return <div key={i} className="ml-2 flex gap-2 mb-1"><span className="opacity-50">•</span><span>{line.substring(1)}</span></div>;
+            if (line.trim() === '') return <div key={i} className="h-2"></div>;
+            return <p key={i} className="mb-1">{line}</p>;
+          })}
+        </div>
+      );
+    };
+
+    // --- THEMES ---
+    const THEMES = {
+      blue: { primary: 'blue', secondary: 'sky', accent: 'cyan', gradient: 'from-blue-700 to-sky-400', darkBg: 'bg-[#0b1121]', lightBg: 'bg-slate-50', panelDark: 'glass-dark border-blue-500/10', panelLight: 'glass-light border-slate-200' },
+      violet: { primary: 'violet', secondary: 'fuchsia', accent: 'purple', gradient: 'from-violet-700 to-fuchsia-400', darkBg: 'bg-[#1a0b2e]', lightBg: 'bg-purple-50', panelDark: 'glass-dark border-violet-500/10', panelLight: 'glass-light border-purple-200' },
+      emerald: { primary: 'emerald', secondary: 'teal', accent: 'green', gradient: 'from-emerald-700 to-teal-400', darkBg: 'bg-[#062c1b]', lightBg: 'bg-emerald-50', panelDark: 'glass-dark border-emerald-500/10', panelLight: 'glass-light border-emerald-200' },
+      rose: { primary: 'rose', secondary: 'pink', accent: 'red', gradient: 'from-rose-700 to-pink-400', darkBg: 'bg-[#2e0b16]', lightBg: 'bg-rose-50', panelDark: 'glass-dark border-rose-500/10', panelLight: 'glass-light border-rose-200' },
+      amber: { primary: 'amber', secondary: 'orange', accent: 'yellow', gradient: 'from-amber-700 to-orange-400', darkBg: 'bg-[#2e1d0b]', lightBg: 'bg-orange-50', panelDark: 'glass-dark border-amber-500/10', panelLight: 'glass-light border-orange-200' }
+    };
+
+    // --- MAIN APP ---
+
+    function App() {
+      const [theme, setTheme] = useState('dark');
+      const [colorTheme, setColorTheme] = useState('blue');
+      const [showSettings, setShowSettings] = useState(false);
+      const [toast, setToast] = useState(null);
+      const [apiKey, setApiKey] = useState(() => localStorage.getItem('gemini_api_key') || '');
+      
+      const [activeTab, setActiveTab] = useState('soap');
+      const [patientData, setPatientData] = useState({ name: '', age: '', gender: '', id: '', dum: '', bed: '' });
+      const [soap, setSoap] = useState({ s: '', o: '', a: '', p: '' });
+      const [prescriptions, setPrescriptions] = useState([]);
+      const [exams, setExams] = useState([]);
+      const [doctorData, setDoctorData] = useState({ name: 'Dr. Nome Sobrenome', specialty: 'ESPECIALIDADE', crm: 'CRM 00000', address: 'Consultório', phone: '(00) 0000-0000' });
+      
+      const [isProcessing, setIsProcessing] = useState(false);
+      const [processingStatus, setProcessingStatus] = useState('');
+      const [showIgModal, setShowIgModal] = useState(false);
+      const [igDateInput, setIgDateInput] = useState('');
+      const [igResult, setIgResult] = useState('');
+      
+      // Clinical Tools
+      const [selectedSpecialty, setSelectedSpecialty] = useState(null);
+      const [selectedTool, setSelectedTool] = useState(null);
+      const [toolInput, setToolInput] = useState('');
+      const [toolImage, setToolImage] = useState(null);
+      const [toolOutput, setToolOutput] = useState('');
+      const [fluxoImage, setFluxoImage] = useState(null);
+
+      // Prescriber
+      const [searchTerm, setSearchTerm] = useState('');
+      const [showManualAdd, setShowManualAdd] = useState(false);
+      const [manualItem, setManualItem] = useState({ type: 'med', name: '', details: '' });
+
+      // Docs
+      const [docType, setDocType] = useState('receita');
+      const [logoImage, setLogoImage] = useState(null);
+
+      const toggleTheme = () => setTheme(prev => prev === 'dark' ? 'light' : 'dark');
+      const currentTheme = THEMES[colorTheme];
+      const primaryColor = currentTheme.primary;
+      const secondaryColor = currentTheme.secondary;
+      
+      const bgClass = theme === 'dark' ? `${currentTheme.darkBg} text-${secondaryColor}-50` : `${currentTheme.lightBg} text-slate-800`;
+      const panelClass = theme === 'dark' ? currentTheme.panelDark : currentTheme.panelLight;
+      const inputClass = theme === 'dark' ? `bg-gray-900 border-${primaryColor}-800/30 text-white placeholder-gray-500` : `bg-white border-slate-300 text-slate-900`;
+      const subText = theme === 'dark' ? `text-${primaryColor}-300/60` : 'text-slate-500';
+
+      useEffect(() => {
+        if (apiKey) localStorage.setItem('gemini_api_key', apiKey);
+      }, [apiKey]);
+
+      useEffect(() => {
+        if (!apiKey) setShowSettings(true);
+      }, []);
+
+      const showToastMessage = (msg, type) => setToast({ message: msg, type });
+
+      const getAI = () => {
+        if (!apiKey) {
+          setShowSettings(true);
+          showToastMessage("Insira sua API Key nas configurações.", "error");
+          throw new Error("API Key missing");
+        }
+        return new GoogleGenAI({ apiKey });
+      };
+
+      const handleMagicSoap = async (file) => {
+        try {
+          setIsProcessing(true);
+          setProcessingStatus("Analisando arquivo...");
+          const ai = getAI();
+          const part = await fileToGenerativePart(file);
+          
+          const prompt = `Transcreva e organize este arquivo de áudio/imagem médica no formato SOAP (JSON). Campos: subjective, objective, assessment, plan.`;
+          
+          const response = await ai.models.generateContent({
+            model: 'gemini-1.5-flash',
+            contents: { parts: [part, { text: prompt }] },
+            config: { responseMimeType: "application/json" }
+          });
+          
+          const data = JSON.parse(response.text);
+          setSoap(prev => ({
+            s: prev.s + (data.subjective || ''),
+            o: prev.o + (data.objective || ''),
+            a: prev.a + (data.assessment || ''),
+            p: prev.p + (data.plan || '')
+          }));
+          showToastMessage("Transcrição realizada!", "success");
+        } catch (e) {
+          if(e.message !== "API Key missing") showToastMessage("Erro: " + e.message, "error");
+        } finally {
+          setIsProcessing(false);
+        }
+      };
+
+      const handleToolExecution = async () => {
+        if (!selectedTool) return;
+        try {
+           setIsProcessing(true);
+           setToolOutput('');
+           const ai = getAI();
+           const parts = [];
+           if (toolImage) parts.push(await fileToGenerativePart(toolImage));
+           const context = `PACIENTE: ${patientData.name}, ${patientData.age} anos.\nSOAP: ${JSON.stringify(soap)}`;
+           parts.push({ text: `Atue como ferramenta: ${selectedTool.name}. Contexto: ${context}. Input: ${toolInput}. Seja breve e use Markdown.` });
+
+           const response = await ai.models.generateContent({
+             model: 'gemini-1.5-flash',
+             contents: { parts: parts }
+           });
+           setToolOutput(response.text);
+        } catch (e) {
+          if(e.message !== "API Key missing") showToastMessage("Erro: " + e.message, "error");
+        } finally {
+          setIsProcessing(false);
+        }
+      };
+      
+      const handleFluxoGen = async (promptText) => {
+          try {
+             setIsProcessing(true);
+             setFluxoImage(null);
+             setToolOutput('');
+             setSelectedSpecialty('IA Estratégica');
+             setSelectedTool({name: 'Fluxo IA', desc: 'Protocolo gerado'});
+             setActiveTab('clinical');
+             
+             const ai = getAI();
+             const textResp = await ai.models.generateContent({
+                 model: 'gemini-1.5-pro',
+                 contents: `Crie um fluxograma médico detalhado sobre: ${promptText}. Use Markdown.`
+             });
+             setToolOutput(textResp.text);
+             
+             // Nota: Geração de imagem via REST requer modelo especifico ou hack. 
+             // Simplificando para texto neste demo single-file.
+          } catch(e) {
+              showToastMessage("Erro fluxo: " + e.message, "error");
+          } finally {
+              setIsProcessing(false);
+          }
+      }
+
+      // --- RENDERERS ---
+
+      const renderSOAP = () => (
+        <div className="flex flex-col h-full overflow-y-auto p-4 space-y-4 pb-24">
+          <div className={`${panelClass} p-4 rounded-xl space-y-3`}>
+             <div className="flex justify-between items-center">
+                <h2 className="font-bold flex items-center gap-2 text-xl">
+                  <BrainCircuit className={`text-${primaryColor}-500`}/>
+                  <span className={theme === 'dark' ? 'text-white' : 'text-gray-900'}>NexusMed</span>
+                </h2>
+                <div className="flex gap-2">
+                   <button onClick={() => setShowSettings(true)} className={`p-2 rounded-full relative ${theme === 'dark' ? 'bg-white/10 text-gray-300' : `bg-${primaryColor}-100 text-${primaryColor}-700`}`}>
+                      <Settings size={18}/>
+                      {!apiKey && <span className="absolute -top-1 -right-1 w-3 h-3 bg-red-500 rounded-full animate-pulse border-2 border-white"></span>}
+                   </button>
+                   <button onClick={toggleTheme} className={`p-2 rounded-full ${theme === 'dark' ? 'bg-white/10 text-yellow-400' : `bg-${primaryColor}-100 text-${primaryColor}-700`}`}>
+                      {theme === 'dark' ? <Sun size={18}/> : <Moon size={18}/>}
+                   </button>
+                </div>
+             </div>
+             <div className="grid grid-cols-2 gap-3">
+               <input placeholder="Nome" className={`w-full rounded p-2 text-sm outline-none border ${inputClass}`} value={patientData.name} onChange={e => setPatientData({...patientData, name: e.target.value})} />
+               <div className="grid grid-cols-3 gap-2">
+                 <input placeholder="Idade" className={`w-full rounded p-2 text-sm outline-none border ${inputClass}`} value={patientData.age} onChange={e => setPatientData({...patientData, age: e.target.value})} />
+                 <input placeholder="Gênero" className={`w-full rounded p-2 text-sm outline-none border ${inputClass}`} value={patientData.gender} onChange={e => setPatientData({...patientData, gender: e.target.value})} />
+                 <input placeholder="Leito" className={`w-full rounded p-2 text-sm outline-none border ${inputClass}`} value={patientData.bed} onChange={e => setPatientData({...patientData, bed: e.target.value})} />
+               </div>
+             </div>
+          </div>
+
+          <div className="grid grid-cols-4 gap-2">
+            <button onClick={() => setShowIgModal(true)} className={`flex flex-col items-center justify-center p-2 rounded-xl border ${panelClass}`}>
+              <Calculator size={20} className={`text-${secondaryColor}-500 mb-1`} />
+              <span className="text-[10px] font-bold">IG Calc</span>
+            </button>
+            <label className={`flex flex-col items-center justify-center p-2 rounded-xl border cursor-pointer ${panelClass}`}>
+               {isProcessing && <div className="animate-spin h-4 w-4 border-2 border-blue-500 rounded-full border-t-transparent absolute"></div>}
+               <Wand2 size={20} className={`text-${primaryColor}-500 mb-1`} />
+               <span className="text-[10px] font-bold">Magic SOAP</span>
+               <input type="file" className="hidden" accept="audio/*,image/*" onChange={(e) => e.target.files?.[0] && handleMagicSoap(e.target.files[0])} />
+            </label>
+             <button onClick={() => handleFluxoGen("Protocolo Geral")} className={`flex flex-col items-center justify-center p-2 rounded-xl border ${panelClass}`}>
+              <Network size={20} className={`text-${secondaryColor}-500 mb-1`} />
+              <span className="text-[10px] font-bold">Fluxo IA</span>
+            </button>
+            <button className={`flex flex-col items-center justify-center p-2 rounded-xl border ${panelClass}`}>
+               <MessageCircle size={20} className="text-emerald-500 mb-1" />
+               <span className="text-[10px] font-bold">Tradutor</span>
+            </button>
+          </div>
+
+          {['s', 'o', 'a', 'p'].map(field => (
+             <div key={field} className={`${panelClass} rounded-xl flex flex-col relative`}>
+                <div className="p-3 border-b border-gray-500/10 flex justify-between">
+                   <span className={`font-bold text-${primaryColor}-500 uppercase text-xs`}>{field.toUpperCase()}</span>
+                   <button onClick={() => setSoap(prev => ({...prev, [field]: ''}))}><Trash2 size={14} className="text-gray-400 hover:text-red-500"/></button>
+                </div>
+                <textarea 
+                  className={`bg-transparent w-full p-3 min-h-[100px] outline-none text-sm ${theme === 'dark' ? 'text-gray-200' : 'text-slate-800'}`}
+                  placeholder="Digite..."
+                  value={soap[field]}
+                  onChange={e => setSoap({...soap, [field]: e.target.value})}
+                />
+             </div>
+          ))}
+          
+           {showIgModal && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+              <div className={`${theme === 'dark' ? 'bg-[#0b1121] border-white/10' : 'bg-white border-slate-200'} border p-6 rounded-xl w-full max-w-sm`}>
+                <h3 className="text-lg font-bold mb-4">Calculadora IG</h3>
+                <input type="date" className={`w-full rounded p-2 mb-4 border ${inputClass}`} value={igDateInput} onChange={(e) => setIgDateInput(e.target.value)} />
+                <button onClick={() => {
+                   if (!igDateInput) return;
+                   const diff = Math.floor((new Date() - new Date(igDateInput)) / (1000 * 60 * 60 * 24));
+                   setIgResult(`${Math.floor(diff/7)} semanas e ${diff%7} dias`);
+                }} className={`w-full py-2 bg-${primaryColor}-600 text-white rounded font-bold mb-4`}>Calcular</button>
+                {igResult && <div className="text-center font-bold text-lg mb-4">{igResult}</div>}
+                <button onClick={() => setShowIgModal(false)} className="w-full py-2 bg-gray-500/20 rounded">Fechar</button>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+
+      const renderClinical = () => {
+         if (selectedTool) {
+             return (
+                 <div className="flex flex-col h-full p-4">
+                     <button onClick={() => setSelectedTool(null)} className="mb-4 flex items-center gap-2 font-bold"><ArrowLeft size={16}/> Voltar</button>
+                     <h2 className="text-xl font-bold mb-2">{selectedTool.name}</h2>
+                     <p className="text-sm opacity-70 mb-4">{selectedTool.desc}</p>
+                     
+                     <textarea className={`w-full p-3 rounded border mb-4 ${inputClass}`} placeholder="Dados do paciente..." value={toolInput} onChange={e => setToolInput(e.target.value)} rows={4}/>
+                     <button onClick={handleToolExecution} className={`w-full py-3 bg-${primaryColor}-600 text-white rounded font-bold flex items-center justify-center gap-2`}>
+                        {isProcessing ? "Processando..." : <><Play size={16}/> Executar IA</>}
+                     </button>
+                     
+                     {toolOutput && (
+                         <div className={`mt-4 p-4 rounded-xl ${panelClass} overflow-y-auto flex-1`}>
+                             <SimpleMarkdown content={toolOutput} theme={theme} />
+                         </div>
+                     )}
+                 </div>
+             )
+         }
+         return (
+             <div className="p-4 overflow-y-auto h-full pb-24">
+                 <h2 className={`text-xl font-bold mb-4 text-${primaryColor}-500 flex items-center gap-2`}><BrainCircuit/> IA Clínica</h2>
+                 <div className="grid grid-cols-1 gap-2">
+                     {Object.keys(TOOLS_DB).map(spec => (
+                         <div key={spec} className="mb-4">
+                             <h3 className="font-bold text-sm opacity-50 uppercase mb-2">{spec}</h3>
+                             {TOOLS_DB[spec].map(tool => (
+                                 <button key={tool.name} onClick={() => {setSelectedSpecialty(spec); setSelectedTool(tool);}} className={`w-full text-left p-3 rounded-lg mb-2 flex justify-between items-center ${panelClass}`}>
+                                     <div>
+                                         <div className="font-bold">{tool.name}</div>
+                                         <div className="text-xs opacity-60">{tool.desc}</div>
+                                     </div>
+                                     <ChevronRight size={16}/>
+                                 </button>
+                             ))}
+                         </div>
+                     ))}
+                 </div>
+             </div>
+         );
+      };
+
+      const renderPrescriber = () => (
+        <div className="flex flex-col h-full p-4 pb-24">
+            <h2 className={`text-xl font-bold mb-4 text-${primaryColor}-500 flex items-center gap-2`}><Pill/> Prescritor</h2>
+            <div className="relative mb-4">
+                <Search className="absolute left-3 top-2.5 text-gray-500" size={16}/>
+                <input className={`w-full rounded-lg py-2 pl-10 border ${inputClass}`} placeholder="Buscar..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)}/>
+            </div>
+            
+            <div className="flex-1 overflow-y-auto space-y-2">
+                {MEDICATIONS_DB.filter(m => m.name.toLowerCase().includes(searchTerm.toLowerCase())).map((med, i) => (
+                    <div key={i} className={`p-3 rounded-lg flex justify-between items-center ${panelClass}`}>
+                        <div>
+                            <div className="font-bold">{med.name}</div>
+                            <div className="text-xs opacity-60">{med.posology}</div>
+                        </div>
+                        <button onClick={() => { setPrescriptions([...prescriptions, {...med}]); showToastMessage("Adicionado!", "success"); }} className={`p-2 rounded-full bg-${primaryColor}-500/20 text-${primaryColor}-500`}><Plus size={16}/></button>
+                    </div>
+                ))}
+            </div>
+        </div>
+      );
+
+      const renderDocs = () => (
+          <div className={`h-full flex flex-col ${theme === 'dark' ? currentTheme.darkBg : 'bg-slate-100'}`}>
+              <div className="p-4 border-b flex justify-between items-center bg-white text-black no-print">
+                  <div className="flex gap-2">
+                      <button onClick={() => setDocType('receita')} className={`px-3 py-1 rounded font-bold ${docType === 'receita' ? 'bg-blue-600 text-white' : 'bg-gray-200'}`}>Receita</button>
+                      <button onClick={() => setDocType('hospital')} className={`px-3 py-1 rounded font-bold ${docType === 'hospital' ? 'bg-blue-600 text-white' : 'bg-gray-200'}`}>Hospitalar</button>
+                  </div>
+                  <button onClick={() => window.print()} className="bg-emerald-600 text-white px-4 py-2 rounded flex items-center gap-2"><Printer size={16}/> Imprimir</button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-8 flex justify-center bg-slate-300">
+                  <div className={`bg-white text-black shadow-2xl p-10 print-full ${docType === 'hospital' ? 'w-[297mm] min-h-[210mm] print:landscape' : 'w-[148mm] min-h-[210mm]'}`}>
+                      
+                      {/* Header Editável */}
+                      <div className="flex justify-between border-b-2 border-black pb-4 mb-6">
+                         <div>
+                             <input className="font-bold text-lg w-full outline-none" value={doctorData.name} onChange={e => setDoctorData({...doctorData, name: e.target.value})} />
+                             <input className="text-sm w-full outline-none" value={doctorData.specialty} onChange={e => setDoctorData({...doctorData, specialty: e.target.value})} />
+                             <input className="text-xs text-gray-500 w-full outline-none" value={doctorData.crm} onChange={e => setDoctorData({...doctorData, crm: e.target.value})} />
+                         </div>
+                         <div className="text-right text-sm">Data: {new Date().toLocaleDateString('pt-BR')}</div>
+                      </div>
+
+                      <div className="mb-6">
+                          <div className="text-xs font-bold uppercase text-gray-500">Paciente</div>
+                          <input className="w-full text-lg font-medium border-b border-dashed outline-none" placeholder="Nome do paciente" value={patientData.name} onChange={e => setPatientData({...patientData, name: e.target.value})} />
+                      </div>
+
+                      <div className="space-y-4">
+                          {prescriptions.map((p, i) => (
+                              <div key={i} className="group relative pl-6">
+                                  <span className="absolute left-0 top-0 font-bold">{i+1}.</span>
+                                  <input className="font-bold w-full outline-none" value={p.name} onChange={e => {
+                                      const newP = [...prescriptions]; newP[i].name = e.target.value; setPrescriptions(newP);
+                                  }} />
+                                  <input className="text-sm italic w-full outline-none text-gray-600" value={p.posology} onChange={e => {
+                                      const newP = [...prescriptions]; newP[i].posology = e.target.value; setPrescriptions(newP);
+                                  }} />
+                                  <button onClick={() => setPrescriptions(prescriptions.filter((_, idx) => idx !== i))} className="absolute -right-6 top-0 text-red-500 opacity-0 group-hover:opacity-100 no-print"><X size={14}/></button>
+                              </div>
+                          ))}
+                          <button onClick={() => setPrescriptions([...prescriptions, {name: '', posology: ''}])} className="text-blue-600 text-sm font-bold no-print flex items-center gap-1"><Plus size={12}/> Adicionar Item</button>
+                      </div>
+
+                      <div className="mt-20 text-center border-t border-black pt-2 w-1/2 mx-auto">
+                          Assinatura / Carimbo
+                      </div>
+                  </div>
+              </div>
+          </div>
+      );
+
+      return (
+        <div className={`flex flex-col h-screen w-full transition-colors duration-300 ${bgClass}`}>
+          {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
+
+          <div className="flex-1 overflow-hidden relative">
+            {activeTab === 'soap' && renderSOAP()}
+            {activeTab === 'clinical' && renderClinical()}
+            {activeTab === 'rx' && renderPrescriber()}
+            {activeTab === 'docs' && renderDocs()}
+          </div>
+
+          {/* Settings Modal */}
+          {showSettings && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+              <div className={`${theme === 'dark' ? 'bg-[#0b1121] border-white/10' : 'bg-white border-slate-200'} border p-6 rounded-xl w-full max-w-sm`}>
+                 <div className="flex justify-between items-center mb-4">
+                    <h3 className="font-bold text-lg">Configurações</h3>
+                    <button onClick={() => setShowSettings(false)}><X size={20}/></button>
+                 </div>
+                 <div className="mb-4">
+                    <label className="block text-sm font-bold mb-2">API Key (Gemini)</label>
+                    <input type="password" className={`w-full p-2 rounded border ${inputClass}`} value={apiKey} onChange={e => setApiKey(e.target.value)} placeholder="Cole sua chave aqui..." />
+                 </div>
+                 <div className="grid grid-cols-5 gap-2 mb-4">
+                    {['blue', 'violet', 'emerald', 'rose', 'amber'].map(c => (
+                        <button key={c} onClick={() => setColorTheme(c)} className={`h-8 w-8 rounded-full ${colorTheme === c ? 'ring-2 ring-white' : ''}`} style={{backgroundColor: THEMES[c].primary === 'blue' ? '#3b82f6' : THEMES[c].primary === 'violet' ? '#8b5cf6' : THEMES[c].primary === 'emerald' ? '#10b981' : THEMES[c].primary === 'rose' ? '#f43f5e' : '#f59e0b'}}></button>
+                    ))}
+                 </div>
+                 <div className="mb-4">
+                    <label className="block text-sm font-bold mb-2">Médico</label>
+                    <input className={`w-full p-2 mb-2 rounded border ${inputClass}`} value={doctorData.name} onChange={e => setDoctorData({...doctorData, name: e.target.value})} placeholder="Nome" />
+                    <input className={`w-full p-2 rounded border ${inputClass}`} value={doctorData.crm} onChange={e => setDoctorData({...doctorData, crm: e.target.value})} placeholder="CRM" />
+                 </div>
+                 <button onClick={() => setShowSettings(false)} className={`w-full py-2 bg-${primaryColor}-600 text-white rounded font-bold`}>Salvar</button>
+              </div>
+            </div>
+          )}
+          
+          {isProcessing && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+                  <div className="bg-white dark:bg-gray-900 p-6 rounded-xl flex flex-col items-center">
+                      <div className="animate-spin h-8 w-8 border-4 border-blue-500 rounded-full border-t-transparent mb-2"></div>
+                      <span className="font-bold dark:text-white">Processando IA...</span>
+                  </div>
+              </div>
+          )}
+
+          {/* Bottom Nav */}
+          <div className={`h-20 shrink-0 border-t grid grid-cols-5 relative z-10 no-print ${theme === 'dark' ? 'bg-[#0b1121] border-white/5' : 'bg-white border-slate-200'}`}>
+             <button onClick={() => setActiveTab('soap')} className={`flex flex-col items-center justify-center ${activeTab === 'soap' ? `text-${primaryColor}-500` : 'text-gray-400'}`}><Stethoscope size={24}/><span className="text-[10px]">Anamnese</span></button>
+             <button onClick={() => setActiveTab('clinical')} className={`flex flex-col items-center justify-center ${activeTab === 'clinical' ? `text-${primaryColor}-500` : 'text-gray-400'}`}><BrainCircuit size={24}/><span className="text-[10px]">IA Clínica</span></button>
+             <div className="relative">
+                 <button onClick={() => setActiveTab('docs')} className={`absolute left-1/2 top-0 -translate-x-1/2 -translate-y-6 w-16 h-16 rounded-full flex items-center justify-center shadow-lg border-4 ${activeTab === 'docs' ? `bg-${primaryColor}-600 text-white border-white` : 'bg-slate-100 text-slate-500 border-white'}`}><FileText size={28}/></button>
+             </div>
+             <button onClick={() => setActiveTab('rx')} className={`flex flex-col items-center justify-center ${activeTab === 'rx' ? `text-${primaryColor}-500` : 'text-gray-400'}`}><Pill size={24}/><span className="text-[10px]">Rx</span></button>
+             <button onClick={() => setActiveTab('patients')} className={`flex flex-col items-center justify-center ${activeTab === 'patients' ? `text-${primaryColor}-500` : 'text-gray-400'}`}><Users size={24}/><span className="text-[10px]">Pacientes</span></button>
+          </div>
+        </div>
+      );
+    }
+
+    const root = createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+<script type="module" src="/index.tsx"></script>
+</body>
+</html>
